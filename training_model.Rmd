@@ -1,0 +1,42 @@
+---
+title: "Detección de niños en reservaciones de hotel"
+output: html_document
+date: "2022-10-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#librerias que se usaran
+library(tidyverse)
+```
+
+
+# Feature Engineering
+
+```{r}
+#setwd("/home/davedamian_/Documentos/MCD_ML/Examen parcial")
+hoteles.entrena <- read.csv("reservaciones-menores/hoteles-entrena.csv")
+
+#seleccionamos variables de interes
+hoteles.entrena <- hoteles.entrena %>% select(!c(lead_time, previous_cancellations, previous_bookings_not_canceled, assigned_room_type, booking_changes, deposit_type, company, days_in_waiting_list, average_daily_rate))
+
+#Codificamos la variable objetivo
+hoteles.entrena$children<-ifelse(hoteles.entrena$children=="children",1,0)
+
+#PREPROCESAMIENTO DE VARIABLES EXPLICATIVAS
+
+#codificamos la variable hotel a 0 o 1
+hoteles.entrena$hotel<-ifelse(hoteles.entrena$hotel=="Resort_Hotel",1,0)
+#vemos un histograma de la variable stays_in_weekend_nights, la cual nos dice la cantidad de noches de Sabado o Domingo que el cliente se hosped+o en el hotel
+ggplot(hoteles.entrena, aes(x=stays_in_weekend_nights))+geom_histogram(binwidth = 1)
+```
+
+Y vemos que la mayoríoas de los individuos, permanecen no más de 3 noches de fin de semana en el hotel, así que dividimos en dos categprias esta variable: los que permancen a lo más 3 nochjes de fin de semana y los que permanecen más de 4 noches.
+
+```{r}
+hoteles.entrena$stays_in_weekend_nights<-ifelse(hoteles.entrena$stays_in_weekend_nights<=3,1,0)
+```
+
