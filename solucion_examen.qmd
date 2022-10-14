@@ -30,8 +30,8 @@ hoteles_df |> count(children) |>
 receta_hoteles <- recipe(children ~ 
            hotel + stays_in_weekend_nights +
            meal + adults + market_segment + 
-           distribution_channel + 
-           reserved_room_type + 
+           distribution_channel + lead_time +
+           reserved_room_type + customer_type +
            agent + required_car_parking_spaces + 
            total_of_special_requests  + 
            arrival_date, 
@@ -41,20 +41,27 @@ receta_hoteles <- recipe(children ~
            include_outside_range = TRUE) |>
   step_mutate(agent = ifelse(is.null(agent), 1, 0)) |>
   step_mutate(parking = ifelse(required_car_parking_spaces == "parking", 1, 0)) |>
-  step_cut(total_of_special_requests, breaks = c(0, 1, 2, 3, 4),
-           include_outside_range = TRUE) |>
   step_mutate(month = month(ymd(arrival_date))) |>
   step_relevel(meal, ref_level = "Undefined", skip=TRUE) |>
   step_relevel(market_segment, ref_level = "Direct", skip=TRUE) |>
   step_relevel(distribution_channel, ref_level = "Undefined", skip = TRUE) |>
-  step_dummy(total_of_special_requests, 
-             meal,
+  step_dummy(meal,
              market_segment,
              distribution_channel,
              reserved_room_type,
-             stays_in_weekend_nights) |>
+             stays_in_weekend_nights,
+             customer_type) |>
   step_select(-required_car_parking_spaces, skip=TRUE) |>
-  step_select(-arrival_date, skip = TRUE)
+  step_select(-arrival_date, skip = TRUE) |>
+  step_interact(terms = ~ hotel:starts_with("reserved_room_type")) |>
+  step_interact(terms = ~ hotel:starts_with("market_segment")) |>
+  step_interact(terms = ~ total_of_special_requests:starts_with("meal")) |>
+  step_interact(terms = ~ adults:starts_with("market_segment")) |>
+  step_interact(terms = ~ adults:starts_with("reserved_room_type")) |>
+  step_interact(terms = ~ lead_time:starts_with("reserved_room_type")) |>
+  step_interact(terms = ~ adults:starts_with("stays_in_weekend_nights")) |>
+  step_interact(terms = ~ adults:starts_with("customer_type")) |>
+  step_interact(terms = ~ adults:starts_with("meal"))
 ```
 
 ```{r}
