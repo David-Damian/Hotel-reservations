@@ -1,0 +1,157 @@
+---
+title: "Examen"
+format: html
+editor: visual
+self-contained: true
+---
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(lubridate)
+```
+
+```{r, message = FALSE}
+hoteles_df <- read_csv("./hoteles-entrena.csv", show_col_types = FALSE) |>
+  mutate(children = ifelse(children == "children", 1, 0)) |>
+  mutate(children = as.factor(children))
+set.seed(823)
+```
+
+Y vemos el desbalance de clases:
+
+```{r}
+nrow(hoteles_df)
+hoteles_df |> count(children) |> 
+  mutate(pct = 100 * n / sum(n)) |> 
+  mutate(pct = round(pct, 2))
+```
+```{r}
+receta_hoteles <- recipe(children ~ 
+           hotel + stays_in_weekend_nights +
+           meal + adults + market_segment + 
+           distribution_channel + 
+           reserved_room_type + 
+           agent + required_car_parking_spaces + 
+           total_of_special_requests  + 
+           arrival_date, 
+           data = hoteles_df) |> 
+  step_mutate(hotel = ifelse(hotel == "Resort_Hotel", 1, 0)) |>
+  step_cut(stays_in_weekend_nights, breaks = c(0, 1, 2, 3, 4, 5), 
+           include_outside_range = TRUE) |>
+  step_mutate(agent = ifelse(is.null(agent), 1, 0)) |>
+  step_mutate(parking = ifelse(required_car_parking_spaces == "parking", 1, 0)) |>
+  step_cut(total_of_special_requests, breaks = c(0, 1, 2, 3, 4),
+           include_outside_range = TRUE) |>
+  step_mutate(month = month(ymd(arrival_date))) |>
+  step_relevel(meal, ref_level = "Undefined", skip=TRUE) |>
+  step_relevel(market_segment, ref_level = "Direct", skip=TRUE) |>
+  step_relevel(distribution_channel, ref_level = "Undefined", skip = TRUE) |>
+  step_dummy(total_of_special_requests, 
+             meal,
+             market_segment,
+             distribution_channel,
+             reserved_room_type,
+             stays_in_weekend_nights) |>
+  step_select(-required_car_parking_spaces, skip=TRUE) |>
+  step_select(-arrival_date, skip = TRUE)
+```
+
+```{r}
+receta_hoteles_prep <- prep(receta_hoteles, verbose = TRUE)
+hoteles_tbl <- juice(receta_hoteles_prep)
+dim(hoteles_tbl)
+```
+
+### Regresión logística regularizada
+
+```{r}
+modelo_logistico <- 
+  logistic_reg(mixture = tune(), penalty = tune()) |> 
+  set_args(lambda.min_ratio = 0) |> 
+  set_engine("glmnet")
+
+flujo_hoteles <- workflow() |> 
+  add_recipe(receta_hoteles) |> 
+  add_model(modelo_logistico)
+```
+
+Y ahora ajustamos todos los modelos. Evaluamos con la pérdida logarítmica: 
+
+
+```{r}
+particion_vc <- vfold_cv(hoteles_df, v = 10)
+mis_metricas <- metric_set(mn_log_loss)
+
+# hacemos un grid de valores de mezcla y penalización
+params <- parameters(penalty(range = c(-2,2), trans = log10_trans()),
+                            mixture(range = c(0,1)))
+
+grid <- grid_regular(params, levels = c(penalty = 15, mixture = 4))
+
+eval_tbl <- tune_grid(flujo_hoteles,
+                      resamples = particion_vc,
+                      grid = grid,
+                      metrics = mis_metricas) 
+
+ajustes_tbl <- eval_tbl |>
+  unnest(cols = c(.metrics)) |> 
+  select(id, mixture, penalty, .metric, .estimate)
+ajustes_tbl
+```
+
+```{r}
+ggplot(ajustes_tbl, aes(x = penalty, y = .estimate, colour = mixture, group = mixture)) +
+  geom_point() + geom_line() + scale_x_log10()
+```
+
+Finalmente, seleccionamos el mejor modelo:
+
+```{r}
+mejor_modelo <- select_best(eval_tbl)
+mejor_modelo
+```
+
+
+```{r}
+modelo_final <- finalize_workflow(flujo_hoteles, mejor_modelo) |> 
+  fit(hoteles_df)
+```
+
+### Análisis de las probabilidades de compra
+
+```{r, message = FALSE}
+hoteles_test <- read_csv("./hoteles-prueba.csv", show_col_types = FALSE)
+```
+
+```{r}
+pred_probas <- predict(modelo_final, hoteles_test, type="prob") 
+head(pred_probas)
+```
+
+```{r}
+res <- bind_cols(id = seq(1:nrow(hoteles_test)), prob = pred_probas$.pred_1)
+write.csv(res,"res.csv", row.names = FALSE)
+```
+
+
+```{r}
+pred_probas <- pred_probas |> 
+  bind_cols(hoteles_test)
+head(pred_probas |> select(.pred_1, .pred_0))
+```
+
+Examinamos las probabilidades de compra para la muestra de prueba:
+
+```{r}
+ggplot(pred_probas, aes(x = .pred_Yes)) + geom_histogram()
+```
+
+**Pregunta 2**: ¿Qué pasaría con estos datos si pones un punto de corte de probabilidad
+0.5 para clasificar a alguien como candidato a comprar un seguro de casa móvil? Por ejemplo,
+si queremos clasificar a la clase de máxima probabilidad hacemos:
+
+```{r}
+clase_probas_0.5 <- predict(modelo_final, caravan_prueba)
+clase_probas_0.5 |> group_by(.pred_class) |> count()
+```
