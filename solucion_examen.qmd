@@ -15,7 +15,7 @@ library(lubridate)
 hoteles_df <- read_csv("./hoteles-entrena.csv", show_col_types = FALSE) |>
   mutate(children = ifelse(children == "children", 1, 0)) |>
   mutate(children = as.factor(children))
-set.seed(823)
+colnames(hoteles_df)[8] <- "country_code"
 ```
 
 Y vemos el desbalance de clases:
@@ -26,6 +26,38 @@ hoteles_df |> count(children) |>
   mutate(pct = 100 * n / sum(n)) |> 
   mutate(pct = round(pct, 2))
 ```
+Obtenemos un dataset con los códigos de los países
+
+```{r message=FALSE, warning=FALSE}
+library(RCurl)
+countries_link <- getURL("https://raw.githubusercontent.com/lukes/ISO-3166-Countries-with-Regional-Codes/master/all/all.csv")
+countries <- read.csv(text=countries_link)
+countries <- countries |> select("alpha.3", "region")
+colnames(countries)[1] <- "country_code"
+countries <- countries |> 
+  mutate(region = ifelse(region == "", "Antartica", region))
+```
+
+Se usará la variable country pero hay que hacer una ingeniería de variables
+
+```{r}
+country_mode <- which.max(table(hoteles_df$country_code))
+hoteles_df <- hoteles_df |> 
+  mutate(country_code = ifelse(country_code == "NULL", names(country_mode), country_code)) |>
+  mutate(country_code = ifelse(country_code == "CN", "CHN", country_code))
+```
+
+Hacemos un join de los códigos de país para obtener su región
+
+```{r}
+hoteles_df <- left_join(x=hoteles_df, y=countries, by="country_code")
+hoteles_df <- hoteles_df |>
+  mutate(region = ifelse(country_code == "TMP", "Asia", region))
+hoteles_df <- hoteles_df |> mutate(region = as.factor(region))
+```
+
+Preparamos receta
+
 ```{r}
 receta_hoteles <- recipe(children ~ 
            hotel + stays_in_weekend_nights +
@@ -33,8 +65,8 @@ receta_hoteles <- recipe(children ~
            distribution_channel + lead_time +
            reserved_room_type + customer_type +
            agent + required_car_parking_spaces + 
-           total_of_special_requests  + 
-           arrival_date, 
+           total_of_special_requests +
+           arrival_date + region, 
            data = hoteles_df) |> 
   step_mutate(hotel = ifelse(hotel == "Resort_Hotel", 1, 0)) |>
   step_cut(stays_in_weekend_nights, breaks = c(0, 1, 2, 3, 4, 5), 
@@ -45,12 +77,14 @@ receta_hoteles <- recipe(children ~
   step_relevel(meal, ref_level = "Undefined", skip=TRUE) |>
   step_relevel(market_segment, ref_level = "Direct", skip=TRUE) |>
   step_relevel(distribution_channel, ref_level = "Undefined", skip = TRUE) |>
+  step_relevel(region, ref_level = "Europe", skip = TRUE) |>
   step_dummy(meal,
              market_segment,
              distribution_channel,
              reserved_room_type,
              stays_in_weekend_nights,
-             customer_type) |>
+             customer_type,
+             region) |>
   step_select(-required_car_parking_spaces, skip=TRUE) |>
   step_select(-arrival_date, skip = TRUE) |>
   step_interact(terms = ~ hotel:starts_with("reserved_room_type")) |>
@@ -58,10 +92,14 @@ receta_hoteles <- recipe(children ~
   step_interact(terms = ~ total_of_special_requests:starts_with("meal")) |>
   step_interact(terms = ~ adults:starts_with("market_segment")) |>
   step_interact(terms = ~ adults:starts_with("reserved_room_type")) |>
-  step_interact(terms = ~ lead_time:starts_with("reserved_room_type")) |>
   step_interact(terms = ~ adults:starts_with("stays_in_weekend_nights")) |>
   step_interact(terms = ~ adults:starts_with("customer_type")) |>
-  step_interact(terms = ~ adults:starts_with("meal"))
+  step_interact(terms = ~ adults:starts_with("region")) |>
+  step_interact(terms = ~ adults:starts_with("meal")) |>
+  step_interact(terms = ~ lead_time:starts_with("reserved_room_type")) |>
+  step_interact(terms = ~ lead_time:starts_with("region")) |>
+  step_interact(terms = ~ lead_time:starts_with("customer_type")) |>
+  step_interact(terms = ~ total_of_special_requests:starts_with("region"))
 ```
 
 ```{r}
@@ -94,7 +132,7 @@ mis_metricas <- metric_set(mn_log_loss)
 params <- parameters(penalty(range = c(-2,2), trans = log10_trans()),
                             mixture(range = c(0,1)))
 
-grid <- grid_regular(params, levels = c(penalty = 15, mixture = 4))
+grid <- grid_regular(params, levels = c(penalty = 30, mixture = 10 ))
 
 eval_tbl <- tune_grid(flujo_hoteles,
                       resamples = particion_vc,
@@ -125,10 +163,21 @@ modelo_final <- finalize_workflow(flujo_hoteles, mejor_modelo) |>
   fit(hoteles_df)
 ```
 
-### Análisis de las probabilidades de compra
 
 ```{r, message = FALSE}
 hoteles_test <- read_csv("./hoteles-prueba.csv", show_col_types = FALSE)
+colnames(hoteles_test)[8] <- "country_code"
+hoteles_test <- hoteles_test |> 
+  mutate(country_code = ifelse(country_code == "NULL", names(country_mode), country_code)) |>
+  mutate(country_code = ifelse(country_code == "CN", "CHN", country_code))
+```
+
+```{r}
+hoteles_test <- left_join(x=hoteles_test, y=countries, by="country_code")
+hoteles_test <- hoteles_test |>
+  mutate(region = ifelse(country_code == "TMP", "Asia", region))
+hoteles_test <- hoteles_test |> mutate(region = as.factor(region))
+hoteles_test <- hoteles_test |> arrange(id)
 ```
 
 ```{r}
@@ -148,17 +197,3 @@ pred_probas <- pred_probas |>
 head(pred_probas |> select(.pred_1, .pred_0))
 ```
 
-Examinamos las probabilidades de compra para la muestra de prueba:
-
-```{r}
-ggplot(pred_probas, aes(x = .pred_Yes)) + geom_histogram()
-```
-
-**Pregunta 2**: ¿Qué pasaría con estos datos si pones un punto de corte de probabilidad
-0.5 para clasificar a alguien como candidato a comprar un seguro de casa móvil? Por ejemplo,
-si queremos clasificar a la clase de máxima probabilidad hacemos:
-
-```{r}
-clase_probas_0.5 <- predict(modelo_final, caravan_prueba)
-clase_probas_0.5 |> group_by(.pred_class) |> count()
-```
