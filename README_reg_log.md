@@ -5,15 +5,19 @@ Matriz de correlación
 
 Hotel: codificar 0 y 1
 
-Lead_time: tentativamente no
+Lead_time: normalizarla
 
 Stays in weekend nights: codificar dummy
+
+Stays in week nights: codificar dummy
+
+Adults: normalizarla
 
 Children: codificar 0 y 1
 
 Meal: codificar dummy
 
-Country: join con region y nos quedamos con continente y dummy
+Country: join con ISO3166 y nos quedamos con region y dummy
 
 Market segment: dummy
 
@@ -37,12 +41,12 @@ company: quitar
 
 days in waiting list: quitar
 
-customer_type: tentativamente no
+customer_type: dummy
 
-average_daily_rate: quitar
+average_daily_rate: normalizar
 
 parking: 0 y 1
 
-total of special requests dejamos
+total of special requests: normalizar
 
-arrival_date: mes únicamente
+arrival_date: mes únicamente y normalizar
