@@ -12,7 +12,7 @@ library(lubridate)
 ```
 
 ```{r, message = FALSE}
-hoteles_df <- read_csv("./hoteles-entrena.csv", show_col_types = FALSE) |>
+hoteles_df <- read_csv("./datos/hoteles-entrena.csv", show_col_types = FALSE) |>
   mutate(children = ifelse(children == "children", 1, 0)) |>
   mutate(children = as.factor(children))
 colnames(hoteles_df)[8] <- "country_code"
@@ -64,16 +64,19 @@ receta_hoteles <- recipe(children ~
            hotel + lead_time + stays_in_weekend_nights + 
            stays_in_week_nights + adults + meal +
            region + market_segment + distribution_channel +
-           reserved_room_type + agent + customer_type +
+           reserved_room_type + assigned_room_type +
+           agent + company + customer_type + 
            average_daily_rate + required_car_parking_spaces + 
-           total_of_special_requests + arrival_date, 
+           total_of_special_requests + 
+           arrival_date, 
            data = hoteles_df) |> 
   step_mutate(hotel = ifelse(hotel == "Resort_Hotel", 1, 0)) |>
   step_cut(stays_in_weekend_nights, breaks = c(0, 1, 2, 3, 4, 5), 
            include_outside_range = TRUE) |>
   step_cut(stays_in_week_nights, breaks = c(0, 1, 2, 3, 4, 5), 
            include_outside_range = TRUE) |>
-  step_mutate(agent = ifelse(is.null(agent), 1, 0)) |>
+  step_mutate(agent = ifelse(agent == "NULL", 0, 1)) |>
+  step_mutate(company = ifelse(company == "NULL", 0, 1)) |>
   step_mutate(parking = ifelse(required_car_parking_spaces == "parking", 1, 0)) |>
   step_mutate(month = month(ymd(arrival_date))) |>
   step_relevel(meal, ref_level = "Undefined", skip=TRUE) |>
@@ -84,6 +87,7 @@ receta_hoteles <- recipe(children ~
              market_segment,
              distribution_channel,
              reserved_room_type,
+             assigned_room_type,
              stays_in_weekend_nights,
              stays_in_week_nights,
              customer_type,
@@ -93,24 +97,45 @@ receta_hoteles <- recipe(children ~
   step_interact(terms = ~ hotel:starts_with("reserved_room_type")) |>
   step_interact(terms = ~ hotel:starts_with("market_segment")) |>
   step_interact(terms = ~ hotel:starts_with("customer_type")) |>
+  step_interact(terms = ~ hotel:starts_with("stays_in_weekend_nights")) |>
+  step_interact(terms = ~ hotel:starts_with("stays_in_week_nights")) |>
+  step_interact(terms = ~ hotel:starts_with("region")) |>
+  step_interact(terms = ~ hotel:starts_with("assigned_room_type")) |>
   step_interact(terms = ~ adults:starts_with("market_segment")) |>
   step_interact(terms = ~ adults:starts_with("reserved_room_type")) |>
   step_interact(terms = ~ adults:starts_with("stays_in_weekend_nights")) |>
+  step_interact(terms = ~ adults:starts_with("stays_in_week_nights")) |>
   step_interact(terms = ~ adults:starts_with("customer_type")) |>
   step_interact(terms = ~ adults:starts_with("region")) |>
   step_interact(terms = ~ adults:starts_with("meal")) |>
+  step_interact(terms = ~ adults:starts_with("assigned_room_type")) |>
   step_interact(terms = ~ lead_time:starts_with("reserved_room_type")) |>
   step_interact(terms = ~ lead_time:starts_with("region")) |>
   step_interact(terms = ~ lead_time:starts_with("customer_type")) |>
   step_interact(terms = ~ lead_time:starts_with("market_segment")) |>
+  step_interact(terms = ~ lead_time:starts_with("stays_in_weekend_nights")) |>
+  step_interact(terms = ~ lead_time:starts_with("stays_in_week_nights")) |>
   step_interact(terms = ~ total_of_special_requests:starts_with("meal")) |>
   step_interact(terms = ~ total_of_special_requests:starts_with("reserved_room_type")) |>
   step_interact(terms = ~ total_of_special_requests:starts_with("customer_type")) |>
+  step_interact(terms = ~ total_of_special_requests:starts_with("assigned_room_type")) |>
   step_interact(terms = ~ average_daily_rate:starts_with("adults")) |>
   step_interact(terms = ~ average_daily_rate:starts_with("reserved_room_type")) |>
+  step_interact(terms = ~ average_daily_rate:starts_with("assigned_room_type")) |>
   step_interact(terms = ~ average_daily_rate:starts_with("customer_type")) |>
   step_interact(terms = ~ average_daily_rate:starts_with("region")) |>
-  step_interact(terms = ~ average_daily_rate:starts_with("meal"))
+  step_interact(terms = ~ average_daily_rate:starts_with("meal")) |>
+  step_interact(terms = ~ company:starts_with("customer_type")) |>
+  step_interact(terms = ~ company:starts_with("reserved_room_type")) |>
+  step_interact(terms = ~ company:starts_with("distribution_channel")) |>
+  step_interact(terms = ~ company:starts_with("market_segment")) |>
+  step_interact(terms = ~ month:starts_with("stays_in_weekend_nights")) |>
+  step_interact(terms = ~ month:starts_with("stays_in_week_nights")) |>
+  step_interact(terms = ~ month:starts_with("region")) |>
+  step_interact(terms = ~ month:starts_with("market_segment")) |>
+  step_interact(terms = ~ month:starts_with("reserved_room_type")) |>
+  step_interact(terms = ~ month:starts_with("assigned_room_type")) |>
+  step_interact(terms = ~ month:starts_with("customer_type"))
 ```
 
 ```{r}
@@ -149,23 +174,22 @@ modelo_logistico <-
   logistic_reg(mixture = tune(), penalty = tune()) |> 
   set_args(lambda.min_ratio = 0, weights = weights_children) |> 
   set_engine("glmnet")
-
 flujo_hoteles <- workflow() |> 
-  add_recipe(receta_hoteles) |> 
+  add_recipe(receta_normalized) |> 
   add_model(modelo_logistico)
 ```
 
 Y ahora ajustamos todos los modelos. Evaluamos con la pérdida logarítmica:
 
 ```{r}
-particion_vc <- vfold_cv(hoteles_df, v = 15)
+particion_vc <- vfold_cv(hoteles_df, v = 10)
 mis_metricas <- metric_set(mn_log_loss)
 
 # hacemos un grid de valores de mezcla y penalización
-params <- parameters(penalty(range = c(-5,5), trans = log10_trans()),
+params <- parameters(penalty(range = c(-8,2), trans = log10_trans()),
                             mixture(range = c(0,1)))
 
-grid <- grid_regular(params, levels = c(penalty = 50, mixture = 10))
+grid <- grid_regular(params, levels = c(penalty = 75, mixture = 25))
 
 eval_tbl <- tune_grid(flujo_hoteles,
                       resamples = particion_vc,
@@ -198,7 +222,7 @@ modelo_final <- finalize_workflow(flujo_hoteles, mejor_modelo) |>
 ### Análisis de las probabilidades de compra
 
 ```{r, message = FALSE}
-hoteles_test <- read_csv("./hoteles-prueba.csv", show_col_types = FALSE)
+hoteles_test <- read_csv("./datos/hoteles-prueba.csv", show_col_types = FALSE)
 colnames(hoteles_test)[8] <- "country_code"
 hoteles_test <- hoteles_test |> 
   mutate(country_code = ifelse(country_code == "NULL", names(country_mode), country_code)) |>
